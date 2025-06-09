@@ -42,7 +42,7 @@ var expertSystemPrompt = `Ты эксперт по поиску в YouTrack. Т�
   13. НЕ пытайся использовать сортировку в Youtrack-запросах.
 
 Примеры запросов:
-- "найти задачи в проекте CRM в статусе Blocker у пользователя Сергей Шамбир" -- project: CRM state: Blocker assignee: sergey.shambir
+- "найти задачи в проекте CRM в статусе Blocker у пользователя Константин Гейст" -- project: CRM state: Blocker assignee: konstantin.geyst
 - "найти задачи в проекте ISONLINE, где упоминается слово оргструктура" -- project: ISONLINE AND (description: "оргструктура" OR summary: "оргструктура")
 - "найти задачи в проекте ISOF в статусе Open, но не в статусе Submitted, где упоминается React" -- project: ISOF AND state: Open AND state: -Submitted AND (description: "React" OR summary: "React")
 и т.д.
@@ -139,20 +139,64 @@ func agentAnswerStream(userQuestion string, w StreamWriter) {
 
 		params := map[string]string{
 			"query":  query,
-			"fields": "idReadable,summary,description,customFields(name,value(name)),comments(text,author(name))",
+			"fields": "idReadable,summary,description,customFields(name,value(name))",
 		}
 		rawIssues, searchErr := youtrackRequest("/api/issues", params)
+
 		notifyChunk(w, fmt.Sprintf("Найдено %d результатов.\n", len(rawIssues)))
 		if len(rawIssues) > youtrackSearchLimit {
 			rawIssues = rawIssues[0:youtrackSearchLimit]
 		}
 		for _, it := range rawIssues {
 			id := it["idReadable"].(string)
+			summary := it["summary"]
+			description := it["description"]
+
+			// Extract custom fields
+			state, assignee, priority := "", "", ""
+			var reviewers []string
+
+			if cfList, ok := it["customFields"].([]interface{}); ok {
+				for _, cf := range cfList {
+					if cfMap, ok := cf.(map[string]interface{}); ok {
+						name := cfMap["name"].(string)
+						value := cfMap["value"]
+
+						switch name {
+						case "State":
+							if vmap, ok := value.(map[string]interface{}); ok {
+								state = vmap["name"].(string)
+							}
+						case "Assignee":
+							if vmap, ok := value.(map[string]interface{}); ok {
+								assignee = vmap["name"].(string)
+							}
+						case "Priority":
+							if vmap, ok := value.(map[string]interface{}); ok {
+								priority = vmap["name"].(string)
+							}
+						case "Reviewers":
+							if vlist, ok := value.([]interface{}); ok {
+								for _, v := range vlist {
+									if user, ok := v.(map[string]interface{}); ok {
+										reviewers = append(reviewers, user["name"].(string))
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
 			seenIssues[id] = map[string]interface{}{
 				"id":          id,
-				"title":       it["summary"],
-				"description": it["description"],
+				"title":       summary,
+				"description": description,
 				"link":        fmt.Sprintf("%s/issue/%s", youtrackURL, id),
+				"state":       state,
+				"assignee":    assignee,
+				"priority":    priority,
+				"reviewers":   reviewers,
 			}
 		}
 		var issuesSlice []map[string]interface{}
